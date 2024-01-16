@@ -24,7 +24,7 @@ def parse_args():
 
     # basic settings
     parser.add_argument('--data-root', type=str, required=True)
-    parser.add_argument('--dataset', type=str, choices=['pascal', 'cityscapes','kidney'], default='pascal')
+    parser.add_argument('--dataset', type=str, choices=['pascal', 'cityscapes', 'kidney'], default='pascal')# 2023.6.12 added kidney
     parser.add_argument('--batch-size', type=int, default=16)
     parser.add_argument('--lr', type=float, default=None)
     parser.add_argument('--epochs', type=int, default=None)
@@ -166,12 +166,73 @@ def main(args):
 
 def init_basic_elems(args):
     model_zoo = {'deeplabv3plus': DeepLabV3Plus, 'pspnet': PSPNet, 'deeplabv2': DeepLabV2}
-    model = model_zoo[args.model](args.backbone, 21 if args.dataset == 'kidney' else 19)
+#     model = model_zoo[args.model](args.backbone, 21 if args.dataset == 'pascal' else 19)
+    # 2023.6.12 modify
+    model = model_zoo[args.model](args.backbone, 1 if args.dataset == 'kidney' else 19)
 
     head_lr_multiple = 10.0
     if args.model == 'deeplabv2':
         assert args.backbone == 'resnet101'
-        model.load_state_dict(torch.load('pretrained/deeplabv2_resnet101_coco_pretrained.pth'))
+#         model.load_state_dict(torch.load('pretrained/deeplabv2_resnet101_coco_pretrained.pth'))
+        
+#         # 2023.6.13 added
+#         # 載入預訓練權重
+#         pretrained_weights = torch.load('pretrained/deeplabv2_resnet101_coco_pretrained.pth')
+#         # 原始通道數
+#         original_channels = pretrained_weights['classifier.0.weight'].size(0)
+#         print("original_channels:",original_channels)
+#         # 目標通道數
+#         target_channels = 1
+#         # 修改權重通道數
+#         # 原始權重中超過目標通道數的通道設置為零，同時更新偏差（bias）的形狀以匹配目標通道數
+#         for i in range(original_channels):
+#             if i >= target_channels:
+#                 pretrained_weights['classifier.0.weight'][i, :, :, :] = 0.0
+#                 pretrained_weights['classifier.1.weight'][i, :, :, :] = 0.0
+#                 pretrained_weights['classifier.2.weight'][i, :, :, :] = 0.0
+#                 pretrained_weights['classifier.3.weight'][i, :, :, :] = 0.0
+#         # 更新偏差（bias）的形狀
+#         pretrained_weights['classifier.0.bias'] = pretrained_weights['classifier.0.bias'][:target_channels]
+#         pretrained_weights['classifier.1.bias'] = pretrained_weights['classifier.1.bias'][:target_channels]
+#         pretrained_weights['classifier.2.bias'] = pretrained_weights['classifier.2.bias'][:target_channels]
+# #         pretrained_weights['classifier.3.bias'] = pretrained_weights['classifier.3.bias'][:target_channels]
+#         # 保存修改後的權重
+#         torch.save(pretrained_weights, 'pretrained/deeplabv2_resnet101_coco_pretrained_ch_1.pth')
+#         model.load_state_dict(torch.load('pretrained/deeplabv2_resnet101_coco_pretrained_ch_1.pth'))
+
+#         # 2023.6.13 added
+#         # 實例化模型
+#         model = DeepLabV2(args.backbone, nclass=1)
+#         # 載入預訓練權重
+#         pretrained_weights = torch.load('pretrained/deeplabv2_resnet101_coco_pretrained.pth')
+#         # 獲取模型的參數狀態字典
+#         state_dict = model.state_dict()
+#         # 複製權重
+#         for key in pretrained_weights:
+#             if key in state_dict:
+#                 state_dict[key].copy_(pretrained_weights[key])
+#             else:pass
+#         # 保存修改後的權重
+#         torch.save(state_dict, 'pretrained/deeplabv2_resnet101_coco_pretrained_ch_1.pth')
+#         model.load_state_dict(torch.load('pretrained/deeplabv2_resnet101_coco_pretrained_ch_1.pth'))
+        # 2023.6.13 added
+        # 創建DeepLabV2模型實例
+        model = DeepLabV2(backbone='resnet101', nclass=1)
+        # 載入預訓練權重
+        pretrained_weights = torch.load('pretrained/deeplabv2_resnet101_coco_pretrained.pth')
+        # 修改權重形狀
+        model.classifier[0].weight.data = pretrained_weights['classifier.0.weight'][:1]
+        model.classifier[0].bias.data = pretrained_weights['classifier.0.bias'][:1]
+        model.classifier[1].weight.data = pretrained_weights['classifier.1.weight'][:1]
+        model.classifier[1].bias.data = pretrained_weights['classifier.1.bias'][:1]
+        model.classifier[2].weight.data = pretrained_weights['classifier.2.weight'][:1]
+        model.classifier[2].bias.data = pretrained_weights['classifier.2.bias'][:1]
+        model.classifier[3].weight.data = pretrained_weights['classifier.3.weight'][:1]
+        model.classifier[3].bias.data = pretrained_weights['classifier.3.bias'][:1]
+        # 打印修改後的權重形狀
+        for name, param in model.named_parameters():
+            print(f'{name}: {param.shape}')
+            
         head_lr_multiple = 1.0
 
     optimizer = SGD([{'params': model.backbone.parameters(), 'lr': args.lr},
@@ -223,7 +284,9 @@ def train(model, trainloader, valloader, criterion, optimizer, args):
 
             tbar.set_description('Loss: %.3f' % (total_loss / (i + 1)))
 
-        metric = meanIOU(num_classes=21 if args.dataset == 'kidney' else 19)
+#         metric = meanIOU(num_classes=21 if args.dataset == 'pascal' else 19)
+        # 2023.6.12 modify
+        metric = meanIOU(num_classes=1 if args.dataset == 'kidney' else 19)
 
         model.eval()
         tbar = tqdm(valloader)
@@ -298,7 +361,9 @@ def label(model, dataloader, args):
     model.eval()
     tbar = tqdm(dataloader)
 
-    metric = meanIOU(num_classes=21 if args.dataset == 'kidney' else 19)
+#     metric = meanIOU(num_classes=21 if args.dataset == 'pascal' else 19)
+    # 2023.6.12 modify
+    metric = meanIOU(num_classes=1 if args.dataset == 'kidney' else 19)
     cmap = color_map(args.dataset)
 
     with torch.no_grad():
@@ -322,11 +387,11 @@ if __name__ == '__main__':
     args = parse_args()
 
     if args.epochs is None:
-        args.epochs = {'pascal': 80, 'cityscapes': 240, 'kidney':150}[args.dataset]
+        args.epochs = {'pascal': 80, 'cityscapes': 240}[args.dataset]
     if args.lr is None:
-        args.lr = {'pascal': 0.001, 'cityscapes': 0.004 , 'kidney': 0.001}[args.dataset] / 16 * args.batch_size
+        args.lr = {'pascal': 0.001, 'cityscapes': 0.004}[args.dataset] / 16 * args.batch_size
     if args.crop_size is None:
-        args.crop_size = {'pascal': 321, 'cityscapes': 721, 'kidney': 400}[args.dataset]
+        args.crop_size = {'pascal': 321, 'cityscapes': 721}[args.dataset]
 
     print()
     print(args)
