@@ -1,8 +1,12 @@
+# +
 from dataset.semi import SemiDataset
 from model.semseg.deeplabv2 import DeepLabV2
 from model.semseg.deeplabv3plus import DeepLabV3Plus
 from model.semseg.pspnet import PSPNet
-from utils import count_params, meanIOU, color_map
+from utils import count_params, meanIOU, color_map, Accuracy, DiceCoefficient
+
+from utilsf.loss_file import save_loss
+# -
 
 import argparse
 from copy import deepcopy
@@ -29,7 +33,7 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=None)
     parser.add_argument('--epochs', type=int, default=None)
     parser.add_argument('--crop-size', type=int, default=None)
-    parser.add_argument('--backbone', type=str, choices=['resnet50', 'resnet101'], default='resnet50')
+    parser.add_argument('--backbone', type=str, choices=['resnet18', 'resnet50', 'resnet101'], default='resnet50')
     parser.add_argument('--model', type=str, choices=['deeplabv3plus', 'pspnet', 'deeplabv2'],
                         default='deeplabv3plus')
 
@@ -47,6 +51,9 @@ def parse_args():
 
     args = parser.parse_args()
     return args
+
+
+loss_file_path = f'outdir/loss'
 
 
 def main(args):
@@ -77,9 +84,9 @@ def main(args):
 
     model, optimizer = init_basic_elems(args)
     print('\nParams: %.1fM' % count_params(model))
+    best_model, checkpoints = train(model, trainloader, valloader, criterion, optimizer, args, step='supervised_labeled')
 
-    best_model, checkpoints = train(model, trainloader, valloader, criterion, optimizer, args)
-
+    
     """
         ST framework without selective re-training
     """
@@ -104,7 +111,7 @@ def main(args):
 
         model, optimizer = init_basic_elems(args)
 
-        train(model, trainloader, valloader, criterion, optimizer, args)
+        train(model, trainloader, valloader, criterion, optimizer, args, step='st-semi-supervised')
 
         return
 
@@ -140,7 +147,7 @@ def main(args):
 
     model, optimizer = init_basic_elems(args)
 
-    best_model = train(model, trainloader, valloader, criterion, optimizer, args)
+    best_model = train(model, trainloader, valloader, criterion, optimizer, args, step='re-training-1st')
 
     # <=============================== Pseudo label unreliable images ================================>
     print('\n\n\n================> Total stage 5/6: Pseudo labeling unreliable images')
@@ -161,7 +168,7 @@ def main(args):
 
     model, optimizer = init_basic_elems(args)
 
-    train(model, trainloader, valloader, criterion, optimizer, args)
+    train(model, trainloader, valloader, criterion, optimizer, args, step='re-training-2st')
 
 
 def init_basic_elems(args):
@@ -185,7 +192,7 @@ def init_basic_elems(args):
     return model, optimizer
 
 
-def train(model, trainloader, valloader, criterion, optimizer, args):
+def train(model, trainloader, valloader, criterion, optimizer, args, step=""):
     iters = 0
     total_iters = len(trainloader) * args.epochs
 
@@ -201,30 +208,45 @@ def train(model, trainloader, valloader, criterion, optimizer, args):
               (epoch, optimizer.param_groups[0]["lr"], previous_best))
 
         model.train()
-        total_loss = 0.0
+        total_t_loss = 0.0
+        total_v_loss = 0.0
+        
         tbar = tqdm(trainloader)
+        
+        metric_miou = meanIOU(num_classes=21 if args.dataset == 'pascal' else 19)
+        metric_dice = DiceCoefficient(num_classes=21 if args.dataset == 'pascal' else 19)
+        metric_acc = Accuracy()
 
         for i, (img, mask) in enumerate(tbar):
             img, mask = img.cuda(), mask.cuda()
-
             pred = model(img)
             loss = criterion(pred, mask)
-
+            
+            # mIou
+            pred = torch.argmax(pred, dim=1)            
+            metric_miou.add_batch(pred.detach().cpu().numpy(), mask.detach().cpu().numpy())
+            metric_dice.add_batch(pred.detach().cpu().numpy(), mask.detach().cpu().numpy())
+            metric_acc.add_batch(pred.detach().cpu().numpy(), mask.detach().cpu().numpy())
+            
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item()
+            total_t_loss += loss.item()
 
             iters += 1
             lr = args.lr * (1 - iters / total_iters) ** 0.9
             optimizer.param_groups[0]["lr"] = lr
             optimizer.param_groups[1]["lr"] = lr * 1.0 if args.model == 'deeplabv2' else lr * 10.0
 
-            tbar.set_description('Loss: %.3f' % (total_loss / (i + 1)))
-
-        metric = meanIOU(num_classes=21 if args.dataset == 'kidney' else 19)
-
+            tbar.set_description('Loss: %.3f' % (total_t_loss / (i + 1)))
+            
+        avg_train_loss = total_t_loss / len(trainloader)
+        avg_train_miou = metric_miou.evaluate()[-1]
+        avg_train_dice = metric_dice.evaluate()
+        avg_train_acc = metric_acc.evaluate()
+        
+        
         model.eval()
         tbar = tqdm(valloader)
 
@@ -232,13 +254,39 @@ def train(model, trainloader, valloader, criterion, optimizer, args):
             for img, mask, _ in tbar:
                 img = img.cuda()
                 pred = model(img)
+                mask = mask.cuda()  # 確保 mask 也在 GPU 上
+                
+                loss = criterion(pred, mask)
+                
+                total_v_loss += loss.item() 
+                
                 pred = torch.argmax(pred, dim=1)
 
-                metric.add_batch(pred.cpu().numpy(), mask.numpy())
-                mIOU = metric.evaluate()[-1]
-
+                metric_miou.add_batch(pred.cpu().numpy(), mask.cpu().numpy())
+                metric_dice.add_batch(pred.cpu().numpy(), mask.cpu().numpy())
+                metric_acc.add_batch(pred.cpu().numpy(), mask.cpu().numpy())
+                
+                mIOU = metric_miou.evaluate()[-1]
                 tbar.set_description('mIOU: %.2f' % (mIOU * 100.0))
-
+                
+        avg_val_loss = total_v_loss / len(valloader)
+        avg_val_miou = metric_miou.evaluate()[-1]
+        avg_val_dice = metric_dice.evaluate()
+        avg_val_acc = metric_acc.evaluate()
+        
+        save_loss(
+            t_loss=avg_train_loss, 
+            t_miou=avg_train_miou,    
+            t_accuracy=avg_train_acc,
+            t_dice=avg_train_dice,
+            v_loss=avg_val_loss, 
+            v_miou=avg_val_miou,    
+            v_accuracy=avg_val_acc,
+            v_dice=avg_val_dice,
+            filename= f'{loss_file_path}/loss_{step}.csv'
+        )
+        
+        
         mIOU *= 100.0
         if mIOU > previous_best:
             if previous_best != 0:
@@ -252,6 +300,7 @@ def train(model, trainloader, valloader, criterion, optimizer, args):
         if MODE == 'train' and ((epoch + 1) in [args.epochs // 3, args.epochs * 2 // 3, args.epochs]):
             checkpoints.append(deepcopy(model))
 
+    torch.save(model.module.state_dict(),f"model_weight_{step}.pth")
     if MODE == 'train':
         return best_model, checkpoints
 
@@ -294,35 +343,55 @@ def select_reliable(models, dataloader, args):
             f.write(elem[0] + '\n')
 
 
+# +
+
 def label(model, dataloader, args):
     model.eval()
     tbar = tqdm(dataloader)
-
-    metric = meanIOU(num_classes=21 if args.dataset == 'kidney' else 19)
-    cmap = color_map(args.dataset)
-
+    # 2023.6.17 modify
+#     metric = meanIOU(num_classes=21 if args.dataset == ‘pascal’ else 19)
+    metric = meanIOU(num_classes=2 if args.dataset == 'kidney' else 19)
+    # 2023.6.17 modify
+#     cmap = color_map(args.dataset)
+    # 定义两个类别的颜色
+    class_colors = [
+        [0, 0, 0],  # 类别 0 的颜色为黑色
+        [255, 0, 0]  # 类别 1 的颜色为红色
+    ]
+    # 创建调色板
+    cmap = np.array(class_colors, dtype=np.uint8)#.flatten()
+#     print(“cmap:“,cmap)
     with torch.no_grad():
-        for img, mask, id in tbar:
+        # 2023.8.23 remove mask
+#         for img, mask, id in tbar:
+        for img,mask,id in tbar:
             img = img.cuda()
             pred = model(img, True)
             pred = torch.argmax(pred, dim=1).cpu()
-
-            metric.add_batch(pred.numpy(), mask.numpy())
-            mIOU = metric.evaluate()[-1]
-
+            # 2023.8.23 remove metric & mIOU
+#             metric.add_batch(pred.numpy(), mask.numpy())
+#             mIOU = metric.evaluate()[-1]
+            # 模式“P”為8位彩色圖像，它的每個像素用8個bit表示，其對應的彩色值是按照調色板查詢出來的
+            # 2023.8.23 modify mode=‘P’
             pred = Image.fromarray(pred.squeeze(0).numpy().astype(np.uint8), mode='P')
+            # 2023.6.21 modify
             pred.putpalette(cmap)
+#             pred.putpalette([0,0,0,0,255,0])# bg=[0,0,0,],kidney=[0,255,0]
+            # 2023.8.23 modify split(' ‘)[1]
+            # 因為 model P 是存 mask 為 .png，但我將檔名改為取自 image 的 .jpg，所以會出錯
+            # 因此要將 .jpg 改為 .png
+            pred.save('%s/%s' % (args.pseudo_mask_path, os.path.basename(id[0].replace('.jpg','.png'))))
+            # 2023.8.23 remove
+#             tbar.set_description(‘mIOU: %.2f’ % (mIOU * 100.0))
 
-            pred.save('%s/%s' % (args.pseudo_mask_path, os.path.basename(id[0].split(' ')[1])))
 
-            tbar.set_description('mIOU: %.2f' % (mIOU * 100.0))
-
+# -
 
 if __name__ == '__main__':
     args = parse_args()
 
     if args.epochs is None:
-        args.epochs = {'pascal': 80, 'cityscapes': 240, 'kidney':150}[args.dataset]
+        args.epochs = {'pascal': 80, 'cityscapes': 240, 'kidney':100}[args.dataset]
     if args.lr is None:
         args.lr = {'pascal': 0.001, 'cityscapes': 0.004 , 'kidney': 0.001}[args.dataset] / 16 * args.batch_size
     if args.crop_size is None:

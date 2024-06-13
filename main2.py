@@ -174,7 +174,7 @@ def init_basic_elems(args):
     if args.model == 'deeplabv2':
         assert args.backbone == 'resnet101'
 #         model.load_state_dict(torch.load('pretrained/deeplabv2_resnet101_coco_pretrained.pth'))
-        
+
 #         # 2023.6.13 added
 #         # 載入預訓練權重
 #         pretrained_weights = torch.load('pretrained/deeplabv2_resnet101_coco_pretrained.pth')

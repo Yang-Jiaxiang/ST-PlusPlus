@@ -7,6 +7,41 @@ def count_params(model):
     return param_num / 1e6
 
 
+class DiceCoefficient:
+    def __init__(self, num_classes):
+        self.num_classes = num_classes
+        self.smooth = 1e-6  # 為了避免除以零
+
+    def _dice(self, label_pred, label_true):
+        intersection = np.sum(label_pred * label_true)
+        dice = (2. * intersection + self.smooth) / (np.sum(label_pred) + np.sum(label_true) + self.smooth)
+        return dice
+
+    def add_batch(self, predictions, gts):
+        self.dice_scores = []
+        for lp, lt in zip(predictions, gts):
+            self.dice_scores.append(self._dice(lp.flatten(), lt.flatten()))
+
+    def evaluate(self):
+        return np.mean(self.dice_scores)
+
+
+
+class Accuracy: 
+    def __init__(self):
+        self.correct = 0
+        self.total = 0
+
+    def add_batch(self, predictions, gts):
+        for lp, lt in zip(predictions, gts):
+            self.correct += np.sum(lp.flatten() == lt.flatten())
+            self.total += len(lp.flatten())
+
+    def evaluate(self):
+        return self.correct / self.total
+
+
+
 class meanIOU:
     def __init__(self, num_classes):
         self.num_classes = num_classes
