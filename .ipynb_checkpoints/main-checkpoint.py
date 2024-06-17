@@ -222,6 +222,19 @@ def train(model, trainloader, valloader, criterion, optimizer, args, step=""):
             pred = model(img)
             loss = criterion(pred, mask)
             
+            print('img shape: ', img[0].shape)
+            print('mask shape: ', mask[0].shape)
+            
+            # 檢查 mask 的最小值和最大值
+            mask_min = mask.min().item()
+            mask_max = mask.max().item()
+            print(f'Mask min value: {mask_min}, Mask max value: {mask_max}')
+            
+            # 檢查 mask 中包含的所有不同值及其數量
+            unique_values, counts = torch.unique(mask, return_counts=True)
+            for value, count in zip(unique_values, counts):
+                print(f'Value: {value.item()}, Count: {count.item()}')            
+            
             # mIou
             pred = torch.argmax(pred, dim=1)            
             metric_miou.add_batch(pred.detach().cpu().numpy(), mask.detach().cpu().numpy())
