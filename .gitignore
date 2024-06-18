@@ -1,3 +1,4 @@
-*.pth
-0_data_dataset_voc_950_0_data_dataset_voc_950_kidney.zip
-0_data_dataset_voc_950_kidney/*
+0_data_dataset_voc_950/
+VOCtrainval_11-May-2012/
+outdir/
+pretrained/
