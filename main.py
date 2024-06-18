@@ -1,12 +1,10 @@
-# +
 from dataset.semi import SemiDataset
 from model.semseg.deeplabv2 import DeepLabV2
 from model.semseg.deeplabv3plus import DeepLabV3Plus
 from model.semseg.pspnet import PSPNet
 from utils import count_params, meanIOU, color_map, Accuracy, DiceCoefficient
-
+from utilsf.DISELOSS import dice_coefficient 
 from utilsf.loss_file import save_loss
-# -
 
 import argparse
 from copy import deepcopy
@@ -65,7 +63,8 @@ def main(args):
         exit('Please specify reliable-id-path in ST++.')
 
     criterion = CrossEntropyLoss(ignore_index=255)
-
+#     criterion = dice_coefficient
+    
     valset = SemiDataset(args.dataset, args.data_root, 'val', None)
     valloader = DataLoader(valset, batch_size=4 if args.dataset == 'cityscapes' else 1,
                            shuffle=False, pin_memory=True, num_workers=4, drop_last=False)
@@ -173,7 +172,7 @@ def main(args):
 
 def init_basic_elems(args):
     model_zoo = {'deeplabv3plus': DeepLabV3Plus, 'pspnet': PSPNet, 'deeplabv2': DeepLabV2}
-    model = model_zoo[args.model](args.backbone, 21 if args.dataset == 'kidney' else 19)
+    model = model_zoo[args.model](args.backbone, 2 if args.dataset == 'kidney' else 19)
 
     head_lr_multiple = 10.0
     if args.model == 'deeplabv2':
@@ -213,15 +212,15 @@ def train(model, trainloader, valloader, criterion, optimizer, args, step=""):
         
         tbar = tqdm(trainloader)
         
-        metric_miou = meanIOU(num_classes=21 if args.dataset == 'pascal' else 19)
-        metric_dice = DiceCoefficient(num_classes=21 if args.dataset == 'pascal' else 19)
+        metric_miou = meanIOU(num_classes=2 if args.dataset == 'pascal' else 19)
+        metric_dice = DiceCoefficient(num_classes=2 if args.dataset == 'pascal' else 19)
         metric_acc = Accuracy()
 
         for i, (img, mask) in enumerate(tbar):
             img, mask = img.cuda(), mask.cuda()
             pred = model(img)
             loss = criterion(pred, mask)
-            
+                        
             # mIou
             pred = torch.argmax(pred, dim=1)            
             metric_miou.add_batch(pred.detach().cpu().numpy(), mask.detach().cpu().numpy())
@@ -327,7 +326,7 @@ def select_reliable(models, dataloader, args):
 
             mIOU = []
             for i in range(len(preds) - 1):
-                metric = meanIOU(num_classes=21 if args.dataset == 'pascal' else 19)
+                metric = meanIOU(num_classes=2 if args.dataset == 'pascal' else 19)
                 metric.add_batch(preds[i], preds[-1])
                 mIOU.append(metric.evaluate()[-1])
 
