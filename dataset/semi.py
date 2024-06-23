@@ -66,10 +66,12 @@ class SemiDataset(Dataset):
             mask = Image.open(os.path.join(self.pseudo_mask_path, fname))
 
         # basic augmentation on all training images
-        base_size = 400 if self.name == 'pascal' else 2048
-        img, mask = resize(img, mask, base_size, (0.5, 2.0))
-        img, mask = crop(img, mask, self.size)
-        img, mask = hflip(img, mask, p=0.5)
+#         base_size = 400 if self.name == 'pascal' else 2048
+#         img, mask = resize(img, mask, base_size, (0.5, 2.0))
+#         img, mask = crop(img, mask, self.size)
+#         img, mask = hflip(img, mask, p=0.5)
+            img = img.resize((self.size, self.size), Image.BILINEAR)
+            mask = mask.resize((self.size, self.size), Image.NEAREST)
 
         # strong augmentation on unlabeled images
         if self.mode == 'semi_train' and id in self.unlabeled_ids:
@@ -77,7 +79,7 @@ class SemiDataset(Dataset):
                 img = transforms.ColorJitter(0.5, 0.5, 0.5, 0.25)(img)
             img = transforms.RandomGrayscale(p=0.2)(img)
             img = blur(img, p=0.5)
-            img, mask = cutout(img, mask, p=0.5)
+#             img, mask = cutout(img, mask, p=0.5)
 
         img, mask = normalize(img, mask)
 

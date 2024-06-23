@@ -2,8 +2,8 @@ from dataset.semi import SemiDataset
 from model.semseg.deeplabv2 import DeepLabV2
 from model.semseg.deeplabv3plus import DeepLabV3Plus
 from model.semseg.pspnet import PSPNet
-from utils import count_params, meanIOU, color_map, Accuracy, DiceCoefficient
-from utilsf.DISELOSS import dice_coefficient 
+from utils import count_params, meanIOU, MeanIOU, DiceCoefficient
+from utilsf.DISELOSS import DiceLoss 
 from utilsf.loss_file import save_loss
 
 import argparse
@@ -62,8 +62,7 @@ def main(args):
     if args.plus and args.reliable_id_path is None:
         exit('Please specify reliable-id-path in ST++.')
 
-    criterion = CrossEntropyLoss(ignore_index=255)
-#     criterion = dice_coefficient
+    criterion = DiceLoss()
     
     valset = SemiDataset(args.dataset, args.data_root, 'val', None)
     valloader = DataLoader(valset, batch_size=4 if args.dataset == 'cityscapes' else 1,
@@ -76,7 +75,7 @@ def main(args):
     global MODE
     MODE = 'train'
 
-    trainset = SemiDataset(args.dataset, args.data_root, MODE, args.crop_size, args.labeled_id_path)
+    trainset = SemiDataset(args.dataset, args.data_root, MODE, args.crop_size, args.labeled_id_path)    
     trainset.ids = 2 * trainset.ids if len(trainset.ids) < 200 else trainset.ids
     trainloader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True,
                              pin_memory=True, num_workers=16, drop_last=True)
@@ -212,9 +211,8 @@ def train(model, trainloader, valloader, criterion, optimizer, args, step=""):
         
         tbar = tqdm(trainloader)
         
-        metric_miou = meanIOU(num_classes=2 if args.dataset == 'pascal' else 19)
-        metric_dice = DiceCoefficient(num_classes=2 if args.dataset == 'pascal' else 19)
-        metric_acc = Accuracy()
+        metric_miou = MeanIOU()
+        metric_dice = DiceCoefficient()
 
         for i, (img, mask) in enumerate(tbar):
             img, mask = img.cuda(), mask.cuda()
@@ -222,10 +220,8 @@ def train(model, trainloader, valloader, criterion, optimizer, args, step=""):
             loss = criterion(pred, mask)
                         
             # mIou
-            pred = torch.argmax(pred, dim=1)            
-            metric_miou.add_batch(pred.detach().cpu().numpy(), mask.detach().cpu().numpy())
-            metric_dice.add_batch(pred.detach().cpu().numpy(), mask.detach().cpu().numpy())
-            metric_acc.add_batch(pred.detach().cpu().numpy(), mask.detach().cpu().numpy())
+            metric_miou.add_batch(pred, mask)
+            metric_dice.add_batch(pred, mask)
             
             optimizer.zero_grad()
             loss.backward()
@@ -241,9 +237,8 @@ def train(model, trainloader, valloader, criterion, optimizer, args, step=""):
             tbar.set_description('Loss: %.3f' % (total_t_loss / (i + 1)))
             
         avg_train_loss = total_t_loss / len(trainloader)
-        avg_train_miou = metric_miou.evaluate()[-1]
+        avg_train_miou = metric_miou.evaluate()
         avg_train_dice = metric_dice.evaluate()
-        avg_train_acc = metric_acc.evaluate()
         
         
         model.eval()
@@ -259,28 +254,22 @@ def train(model, trainloader, valloader, criterion, optimizer, args, step=""):
                 
                 total_v_loss += loss.item() 
                 
-                pred = torch.argmax(pred, dim=1)
-
-                metric_miou.add_batch(pred.cpu().numpy(), mask.cpu().numpy())
-                metric_dice.add_batch(pred.cpu().numpy(), mask.cpu().numpy())
-                metric_acc.add_batch(pred.cpu().numpy(), mask.cpu().numpy())
+                metric_miou.add_batch(pred, mask)
+                metric_dice.add_batch(pred, mask)
                 
-                mIOU = metric_miou.evaluate()[-1]
+                mIOU = metric_miou.evaluate()
                 tbar.set_description('mIOU: %.2f' % (mIOU * 100.0))
                 
         avg_val_loss = total_v_loss / len(valloader)
-        avg_val_miou = metric_miou.evaluate()[-1]
+        avg_val_miou = metric_miou.evaluate()
         avg_val_dice = metric_dice.evaluate()
-        avg_val_acc = metric_acc.evaluate()
         
         save_loss(
             t_loss=avg_train_loss, 
             t_miou=avg_train_miou,    
-            t_accuracy=avg_train_acc,
             t_dice=avg_train_dice,
             v_loss=avg_val_loss, 
             v_miou=avg_val_miou,    
-            v_accuracy=avg_val_acc,
             v_dice=avg_val_dice,
             filename= f'{loss_file_path}/loss_{step}.csv'
         )
@@ -355,7 +344,7 @@ def label(model, dataloader, args):
     # 定义两个类别的颜色
     class_colors = [
         [0, 0, 0],  # 类别 0 的颜色为黑色
-        [255, 0, 0]  # 类别 1 的颜色为红色
+        [128, 0, 0]  # 类别 1 的颜色为红色
     ]
     # 创建调色板
     cmap = np.array(class_colors, dtype=np.uint8)#.flatten()
@@ -394,7 +383,7 @@ if __name__ == '__main__':
     if args.lr is None:
         args.lr = {'pascal': 0.001, 'cityscapes': 0.004 , 'kidney': 0.001}[args.dataset] / 16 * args.batch_size
     if args.crop_size is None:
-        args.crop_size = {'pascal': 321, 'cityscapes': 721, 'kidney': 400}[args.dataset]
+        args.crop_size = {'pascal': 321, 'cityscapes': 721, 'kidney': 224}[args.dataset]
 
     print()
     print(args)

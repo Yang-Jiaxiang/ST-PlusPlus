@@ -6,11 +6,9 @@ import os
 def save_loss(
     t_loss=0, 
     t_miou=0,    
-    t_accuracy=0,
     t_dice=0,
     v_loss=0, 
     v_miou=0,    
-    v_accuracy=0,
     v_dice=0,
     filename='/tf/PatchCL-MedSeg-pioneeryj/loss_record.csv'
 ):
@@ -18,11 +16,9 @@ def save_loss(
     data = {
         't_loss': [t_loss], 
         't_miou':[t_miou],
-        't_accuracy':[t_accuracy],
         't_dice':[t_dice],
         'v_loss': [v_loss], 
         'v_miou':[v_miou],
-        'v_accuracy':[v_accuracy],
         'v_dice':[v_dice],
         'time': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
     }

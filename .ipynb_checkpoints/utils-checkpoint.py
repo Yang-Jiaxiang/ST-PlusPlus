@@ -1,6 +1,9 @@
 import numpy as np
 from PIL import Image
+import torch.nn.functional as F
+import torch
 
+from utilsf.DISELOSS import DiceLoss
 
 def count_params(model):
     param_num = sum(p.numel() for p in model.parameters())
@@ -8,37 +11,49 @@ def count_params(model):
 
 
 class DiceCoefficient:
-    def __init__(self, num_classes):
-        self.num_classes = num_classes
-        self.smooth = 1e-6  # 為了避免除以零
-
-    def _dice(self, label_pred, label_true):
-        intersection = np.sum(label_pred * label_true)
-        dice = (2. * intersection + self.smooth) / (np.sum(label_pred) + np.sum(label_true) + self.smooth)
-        return dice
-
-    def add_batch(self, predictions, gts):
-        self.dice_scores = []
-        for lp, lt in zip(predictions, gts):
-            self.dice_scores.append(self._dice(lp.flatten(), lt.flatten()))
-
-    def evaluate(self):
-        return np.mean(self.dice_scores)
-
-
-
-class Accuracy: 
     def __init__(self):
-        self.correct = 0
-        self.total = 0
+        self.dice_scores = []
 
     def add_batch(self, predictions, gts):
-        for lp, lt in zip(predictions, gts):
-            self.correct += np.sum(lp.flatten() == lt.flatten())
-            self.total += len(lp.flatten())
+        # 初始化 DiceLoss
+        dice_loss_fn = DiceLoss()
+        
+        # 計算 Dice loss
+        dice_loss = dice_loss_fn(predictions, gts)
+        
+        # 計算 Dice coefficient
+        dice = 1 - dice_loss
+        
+        # 添加到列表中
+        self.dice_scores.append(dice.item())
 
     def evaluate(self):
-        return self.correct / self.total
+        return torch.mean(torch.tensor(self.dice_scores)).item()
+
+    
+class MeanIOU:
+    def __init__(self):
+        self.miou_scores = []
+
+    def add_batch(self, predictions, gts):
+        # Apply threshold
+        gts_one_hot = F.one_hot(gts, num_classes=predictions.shape[1]).permute(0, 3, 1, 2).float()
+        gts_one_hot = gts_one_hot[:, 1:, :, :]
+        
+        predictions = predictions[:, 1:, :, :]
+        predictions = torch.sigmoid(predictions)
+        
+        # Calculate intersection and union
+        intersection = (predictions * gts_one_hot).sum(dim=(2, 3))
+        union = (predictions + gts_one_hot).sum(dim=(2, 3)) - intersection
+        
+        # Calculate mIOU
+        miou = (intersection + 1e-6) / (union + 1e-6)
+        
+        self.miou_scores.append(miou.mean().item())
+
+    def evaluate(self):
+        return torch.mean(torch.tensor(self.miou_scores)).item()
 
 
 
