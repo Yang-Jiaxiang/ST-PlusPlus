@@ -37,6 +37,7 @@ def parse_args():
 
     # semi-supervised settings
     parser.add_argument('--labeled-id-path', type=str, required=True)
+    parser.add_argument('--validation-id-path', type=str, required=True)
     parser.add_argument('--unlabeled-id-path', type=str, required=True)
     parser.add_argument('--pseudo-mask-path', type=str, required=True)
 
@@ -55,6 +56,9 @@ loss_file_path = f'outdir/loss'
 
 
 def main(args):
+    global MODE
+    MODE = 'train'
+    
     if not os.path.exists(args.save_path):
         os.makedirs(args.save_path)
     if not os.path.exists(args.pseudo_mask_path):
@@ -65,16 +69,14 @@ def main(args):
     criterion = CrossEntropyLoss(ignore_index=255)
 #     criterion = dice_coefficient
     
-    valset = SemiDataset(args.dataset, args.data_root, 'val', None)
-    valloader = DataLoader(valset, batch_size=4 if args.dataset == 'cityscapes' else 1,
-                           shuffle=False, pin_memory=True, num_workers=4, drop_last=False)
+    valset = SemiDataset(args.dataset, args.data_root, MODE, args.crop_size, args.validation_id_path)    
+    valloader = DataLoader(valset, batch_size=4, shuffle=True, pin_memory=True, num_workers=4, drop_last=True)
 
     # <====================== Supervised training with labeled images (SupOnly) ======================>
     print('\n================> Total stage 1/%i: '
           'Supervised training on labeled images (SupOnly)' % (6 if args.plus else 3))
 
-    global MODE
-    MODE = 'train'
+
 
     trainset = SemiDataset(args.dataset, args.data_root, MODE, args.crop_size, args.labeled_id_path)
     trainset.ids = 2 * trainset.ids if len(trainset.ids) < 200 else trainset.ids
@@ -250,7 +252,7 @@ def train(model, trainloader, valloader, criterion, optimizer, args, step=""):
         tbar = tqdm(valloader)
 
         with torch.no_grad():
-            for img, mask, _ in tbar:
+            for i, (img, mask) in enumerate(tbar):
                 img = img.cuda()
                 pred = model(img)
                 mask = mask.cuda()  # 確保 mask 也在 GPU 上
